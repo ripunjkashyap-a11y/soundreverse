@@ -16,15 +16,15 @@
 
 ![SoundReverse Default UI](screenshots/ui_empty_state.png)
 
-*The sidebar lists three demo tracks and a file upload zone. The Run Analysis button activates once a track or file is selected.*
+*The sidebar holds the upload zone and three demo tracks; Run analysis activates once one is chosen. Light and dark themes are switched from the toggle in the top bar and persist across sessions.*
 
 ---
 
 ## Results View
 
-![SoundReverse Dashboard](screenshots/ui_dashboard_humble.png)
+![SoundReverse Results View](screenshots/ui_results_view.png)
 
-*HUMBLE. by Kendrick Lamar — Signal Signature (−6.8 LUFS · 150 BPM · Eb Minor), Musician tonal tags (Bass-forward · Warm/dark · Mono-solid), and per-stem tuning targets (Kick 48 Hz ≈ G1, Bass 36 Hz ≈ D1) derived deterministically from the MCP output.*
+*Billie Jean by Michael Jackson — −9.2 LUFS (4.8 dB above the streaming target), 117 BPM, F minor. The Frequency Map plots each stem's tuning target on a log axis from 20 Hz to 20 kHz (Bass 41 Hz, Kick 62 Hz, Snare 210 Hz, Vocals 3200 Hz) and shades the band the recommended EQ acts on, so a boost can be seen landing on the element it was meant for. The critic approved on the first iteration with all four validation checks passing.*
 
 ---
 
