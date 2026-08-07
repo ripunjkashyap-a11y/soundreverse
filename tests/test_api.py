@@ -41,7 +41,7 @@ def client(monkeypatch):
     import api
     monkeypatch.setattr(api, "get_supabase", lambda: _Supabase())
 
-    # 3. Stub run_graph so background tasks don't boot LangGraph/Gemini in tests.
+    # 3. Stub run_graph so background tasks don't boot LangGraph/the LLM in tests.
     #    Returning an error state is the cleanest path — _run_job marks the job
     #    failed via the stubbed Supabase and exits cleanly.
     monkeypatch.setattr(

@@ -218,7 +218,7 @@ If the LLM call fails mid-pipeline, the Musician falls back to deterministic tex
 LangSmith's `client.share_run()` only resolves after `app.invoke()` returns. Keeping the output generator outside the graph means the PDF embeds the real trace URL, not a placeholder.
 
 **Async API with Supabase job queue.**
-The full pipeline (Modal cold start + 4 Gemini calls) takes 70–95s — well beyond an HTTP request window. `POST /analyze` enqueues a job and returns `202 + job_id` immediately. The frontend polls `GET /jobs/{id}` every 3s. Supabase stores job state persistently across restarts.
+The full pipeline (Modal cold start + 4 LLM calls) takes 70–95s — well beyond an HTTP request window. `POST /analyze` enqueues a job and returns `202 + job_id` immediately. The frontend polls `GET /jobs/{id}` every 3s. Supabase stores job state persistently across restarts.
 
 ---
 
@@ -228,7 +228,9 @@ Every run produces a **public, shareable trace** — no login required.
 
 ![LangSmith Waterfall](screenshots/langsmith_trace_waterfall.png)
 
-*Single-pass run — 91.5s total: 78.4s Modal MCP (upload + stem analysis), then gateway (0s) → musician (6.2s) → analyst (4.8s) → critic (2.0s) → approved. 3 Gemini calls, all structured tool calls.*
+*Single-pass run — 91.5s total: 78.4s Modal MCP (upload + stem analysis), then gateway (0s) → musician (6.2s) → analyst (4.8s) → critic (2.0s) → approved. 3 LLM calls, all structured tool calls.*
+
+> This trace and its timings were captured on the earlier Gemini pipeline. The graph shape is unchanged, but LLM-node latencies differ on the current Groq stack.
 
 Live trace: [smith.langchain.com/public/58461f05-d106-47c2-93a4-bbf8460f4c2a/r](https://smith.langchain.com/public/58461f05-d106-47c2-93a4-bbf8460f4c2a/r)
 
@@ -245,7 +247,7 @@ Live trace: [smith.langchain.com/public/58461f05-d106-47c2-93a4-bbf8460f4c2a/r](
 | Layer | Technology |
 |---|---|
 | Agent orchestration | LangGraph `StateGraph` — conditional edges, typed `GraphState` |
-| LLM | `gemini-3.1-flash-lite` via `langchain-google-genai` — structured tool calling |
+| LLM | `llama-3.1-8b-instant` via `langchain-groq` — structured tool calling (override with `GROQ_MODEL`) |
 | Audio analysis | HTDemucs 4-stem, FFmpeg, Librosa — **Modal-hosted MCP server** |
 | MCP client | `requests` + `tenacity` — streams file, polls job, deserialises `SignalSignature` |
 | Schema validation | Pydantic v2 |
@@ -267,8 +269,8 @@ soundreverse/
 │   ├── mcp.py          # Entry node: upload → Modal MCP; demo → cache/*.json
 │   ├── gateway.py      # Pydantic schema validation — no LLM
 │   ├── musician.py     # Stem Hz → TuningTargets + tonal tags; LLM phrases notes
-│   ├── analyst.py      # rules.yaml eval (Python) + Gemini reason writing
-│   ├── critic.py       # 4 deterministic checks + Gemini critique/hints
+│   ├── analyst.py      # rules.yaml eval (Python) + LLM reason writing
+│   ├── critic.py       # 4 deterministic checks + LLM critique/hints
 │   └── graph.py        # LangGraph StateGraph, conditional edges, run()
 ├── schemas/
 │   ├── signal_signature.py  # Pydantic — matches Modal MCP output exactly
@@ -307,7 +309,8 @@ Edit `.env` with your credentials:
 
 | Variable | Required | Notes |
 |---|---|---|
-| `GOOGLE_API_KEY` | ✅ Always | Gemini API key |
+| `GROQ_API_KEY` | ✅ Always | Groq API key |
+| `GROQ_MODEL` | ⚙️ Optional | Defaults to `llama-3.1-8b-instant` |
 | `LANGSMITH_API_KEY` | ✅ Always | LangSmith tracing |
 | `LANGSMITH_PROJECT` | ✅ Always | Project name (default: `soundreverse-v1`) |
 | `LANGCHAIN_TRACING_V2` | ✅ Always | Set to `true` |

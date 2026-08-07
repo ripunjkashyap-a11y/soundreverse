@@ -407,7 +407,9 @@ def output_node(state: "GraphState") -> "GraphState":
             "gateway": {"source": "cache", "latency_ms": None},
             "analyst": {
                 "iterations": state["iteration_count"],
-                "model": "gemini-3.1-flash-lite",
+                # Read at write time so the metadata names the model that actually ran.
+                # Mirrors the default in agents/analyst.py.
+                "model": os.getenv("GROQ_MODEL", "llama-3.1-8b-instant"),
                 "latency_ms": None,
             },
             "critic": {"rounds": state.get("critic_rounds", [])},
