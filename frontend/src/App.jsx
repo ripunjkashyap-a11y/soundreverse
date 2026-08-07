@@ -15,6 +15,7 @@ const API_BASE = import.meta.env.VITE_API_URL ?? ''
 const HEALTH_POLL_MS  = 2500   // retry interval
 const HEALTH_TIMEOUT  = 90_000 // give up after 90s
 const MIN_SPLASH_MS   = 2200   // splash is shown for at least this long (branding)
+const MAX_POLL_RETRIES = 4     // consecutive job-poll failures tolerated before giving up
 
 function useBackendReady() {
   const [ready, setReady]       = useState(false)
@@ -72,6 +73,26 @@ function useBackendReady() {
   return { ready, waiting, elapsed }
 }
 
+// Pull the server's own explanation out of an error response.
+// FastAPI's 422 `detail` is an array of validation objects — take the first message.
+async function readErrorDetail(res) {
+  const body = await res.json().catch(() => ({}))
+  const detail = body?.detail
+  if (Array.isArray(detail)) return detail[0]?.msg || `HTTP ${res.status}`
+  if (typeof detail === 'string') return detail
+  return `HTTP ${res.status}`
+}
+
+// fetch() rejects with a bare `TypeError: Failed to fetch` for every network-level
+// failure — server asleep, connection reset, or a response the browser blocked for
+// missing CORS headers. That message tells the user nothing, so replace it.
+function describeError(e) {
+  if (e instanceof TypeError) {
+    return 'Could not reach the analysis server — it may be asleep, restarting, or rejecting the request. Retry in a moment.'
+  }
+  return e?.message || 'Something went wrong.'
+}
+
 export default function App() {
   const [tracks, setTracks]           = useState([])
   const [uploadedFile, setUploadedFile] = useState(null)
@@ -98,17 +119,31 @@ export default function App() {
   }, [backendReady])
 
   // Shared polling loop: resolves with job result or rejects with an error message.
+  // A poll that fails at the network level is retried a few times — the backend
+  // sleeps/restarts on the free tier, and one blip shouldn't discard a running job.
   function pollJob(jobId) {
     return new Promise((resolve, reject) => {
+      let consecutiveFailures = 0
       const interval = setInterval(async () => {
         try {
           const poll = await fetch(`${API_BASE}/jobs/${jobId}`)
-          if (!poll.ok) { clearInterval(interval); reject(new Error(`Poll error ${poll.status}`)); return }
+          if (!poll.ok) {
+            // 503 = job store briefly unreachable; keep polling. Anything else is fatal.
+            if (poll.status === 503 && ++consecutiveFailures <= MAX_POLL_RETRIES) return
+            clearInterval(interval)
+            reject(new Error(await readErrorDetail(poll)))
+            return
+          }
+          consecutiveFailures = 0
           const job = await poll.json()
           if (job.status === 'completed') { clearInterval(interval); resolve(job.result) }
           else if (job.status === 'failed') { clearInterval(interval); reject(new Error(job.error || 'Job failed')) }
           // pending / processing → keep polling
-        } catch (e) { clearInterval(interval); reject(e) }
+        } catch (e) {
+          if (++consecutiveFailures <= MAX_POLL_RETRIES) return
+          clearInterval(interval)
+          reject(new Error(describeError(e)))
+        }
       }, 3000)
     })
   }
@@ -118,20 +153,12 @@ export default function App() {
     setLoading(true); setResult(null); setError(null)
     try {
       const res = await makeRequest()
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}))
-        // FastAPI 422 detail is an array of validation objects — extract the first message.
-        const detail = err.detail
-        const msg = Array.isArray(detail)
-          ? (detail[0]?.msg || `HTTP ${res.status}`)
-          : (typeof detail === 'string' ? detail : `HTTP ${res.status}`)
-        throw new Error(msg)
-      }
+      if (!res.ok) throw new Error(await readErrorDetail(res))
       const { job_id } = await res.json()
       const data = await pollJob(job_id)
       setResult(data)
     } catch (e) {
-      setError(e.message)
+      setError(describeError(e))
     } finally {
       setLoading(false)
     }
@@ -392,6 +419,19 @@ function EmptyState() {
   )
 }
 
+// The generated PDF/JSON are served by the API, not this origin. The backend only emits
+// absolute URLs when API_BASE_URL is configured; otherwise they arrive as "/outputs/…",
+// which a browser resolves against the frontend host and 404s. Re-anchor those onto the API.
+function resolveOutputs(outputs) {
+  if (!outputs) return outputs
+  return Object.fromEntries(
+    Object.entries(outputs).map(([key, url]) => [
+      key,
+      typeof url === 'string' && url.startsWith('/') ? `${API_BASE}${url}` : url,
+    ])
+  )
+}
+
 function ResultsView({ result }) {
   return (
     <div className="stagger" style={{ padding: '28px 32px', display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -400,7 +440,7 @@ function ResultsView({ result }) {
       <CriticTimeline   rounds={result.pipeline.critic_rounds} />
       <ConfidencePanel  pipeline={result.pipeline}             />
       <ProducerSettings settings={result.settings}            />
-      <OutputDownloads  outputs={result.outputs} traceUrl={result.trace_url} />
+      <OutputDownloads  outputs={resolveOutputs(result.outputs)} traceUrl={result.trace_url} />
     </div>
   )
 }

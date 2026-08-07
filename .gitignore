@@ -54,6 +54,10 @@ Thumbs.db
 # Playwright MCP session data (screenshots, snapshots, logs)
 .playwright-mcp/
 
+# Playwright run artifacts dropped at the repo root.
+# Anchored to root on purpose — the documentation shots in screenshots/ stay tracked.
+/playwright_*.png
+
 # Logs
 update.log
 *.log

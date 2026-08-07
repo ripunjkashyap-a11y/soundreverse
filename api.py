@@ -1,6 +1,7 @@
 import asyncio
 import os
 import sys
+import traceback
 import uuid
 import time
 from datetime import datetime, timezone, timedelta
@@ -14,8 +15,15 @@ load_dotenv(override=True)
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+
+try:  # postgrest ships with supabase-py; tolerate a move so a rename can't take the API down
+    from postgrest import APIError
+except ImportError:  # pragma: no cover
+    class APIError(Exception):  # type: ignore[no-redef]
+        """Fallback so `except APIError` stays valid — a missing row then reads as 503, not 404."""
 
 from agents.graph import run as run_graph
 from utils.supabase_client import get_supabase
@@ -103,11 +111,60 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="SoundReverse API", version="2.0.0", lifespan=lifespan)
 
-_cors_origins = os.getenv(
-    "CORS_ORIGINS",
-    "http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174",
-).split(",")
+_cors_origins = [
+    origin.strip()
+    for origin in os.getenv(
+        "CORS_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174",
+    ).split(",")
+    if origin.strip()
+]
 
+
+class CatchUnhandledErrors:
+    """Turn unhandled exceptions into a JSON 500 that still carries CORS headers.
+
+    Starlette routes `@app.exception_handler(Exception)` to ServerErrorMiddleware,
+    which sits *outside* CORSMiddleware — so its bare `Internal Server Error` reply
+    has no Access-Control-Allow-Origin, the browser blocks it, and the frontend only
+    ever sees "TypeError: Failed to fetch" with the real cause hidden. Catching here
+    (registered before CORSMiddleware, so it nests inside it) lets the response pass
+    back out through CORS and reach the caller intact.
+
+    Plain ASGI rather than BaseHTTPMiddleware: it must not interfere with the
+    BackgroundTasks that /analyze and /demo depend on.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+
+        response_started = False
+
+        async def _send(message):
+            nonlocal response_started
+            if message["type"] == "http.response.start":
+                response_started = True
+            await send(message)
+
+        try:
+            await self.app(scope, receive, _send)
+        except Exception as exc:
+            traceback.print_exc()
+            if response_started:
+                raise  # headers already flushed — can't rewrite the reply
+            await JSONResponse(
+                status_code=500,
+                content={"detail": f"{type(exc).__name__}: {exc}"},
+            )(scope, receive, send)
+
+
+# Order matters: add_middleware() prepends, so the LAST call is the outermost layer.
+# CORS must wrap the catcher, otherwise error responses lose their CORS headers.
+app.add_middleware(CatchUnhandledErrors)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
@@ -127,16 +184,78 @@ ALLOWED_EXTS = {".mp3", ".wav"}
 
 # ── Health check (Koyeb / load-balancer probe) ────────────────────────────────
 
-from fastapi.responses import JSONResponse
-
 @app.get("/health")
 async def health():
-    """Lightweight liveness probe — returns 200 as soon as the process is up."""
+    """Lightweight liveness probe — returns 200 as soon as the process is up.
+
+    Deliberately does *not* touch Supabase: the frontend splash screen gates on this,
+    so it must stay fast and must not fail when only a downstream dependency is out.
+    Use /readyz to check dependencies.
+    """
     return JSONResponse({"status": "ok", "version": "2.0.0"})
+
+
+@app.get("/readyz")
+async def readyz():
+    """Dependency probe — reports whether the job store is actually reachable.
+
+    /health only proves the process is up; a paused Supabase project or bad
+    credentials leave it green while every write endpoint 500s. This is the
+    one call that tells the two apart.
+    """
+    checks: dict[str, str] = {}
+    try:
+        await asyncio.to_thread(
+            lambda: get_supabase().table("jobs").select("id").limit(1).execute()
+        )
+        checks["job_store"] = "ok"
+    except Exception as exc:
+        checks["job_store"] = f"unreachable: {type(exc).__name__}: {exc}"
+
+    checks["sonic_mcp_url"] = "set" if os.getenv("SONIC_MCP_URL") else "missing"
+    checks["groq_api_key"] = "set" if os.getenv("GROQ_API_KEY") else "missing"
+
+    ready = checks["job_store"] == "ok"
+    return JSONResponse(
+        {"status": "ready" if ready else "degraded", "checks": checks},
+        status_code=200 if ready else 503,
+    )
+
 
 # ── Supabase client alias ─────────────────────────────────────────────────────
 
 _get_supabase = get_supabase
+
+
+# ── Job-store access ──────────────────────────────────────────────────────────
+
+def _create_job_row(job_id: str, user_input: str | None, stress_test: bool) -> None:
+    """Insert the pending job row, translating a job-store outage into a clean 503.
+
+    Without this the raw connection error escapes as a bare 500, which historically
+    reached the browser stripped of CORS headers and surfaced as "Failed to fetch".
+    """
+    try:
+        get_supabase().table("jobs").insert({
+            "id": job_id,
+            "status": "pending",
+            "user_input": user_input,
+            "stress_test": stress_test,
+        }).execute()
+    except Exception as exc:
+        traceback.print_exc()
+        print(
+            "[Job store] Insert failed. Check that the Supabase project is running "
+            "(free-tier projects auto-pause when idle) and that SUPABASE_URL / "
+            "SUPABASE_ANON_KEY are correct."
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Job store unavailable ({type(exc).__name__}). The analysis database "
+                "could not be reached — it may be paused or restarting. Try again shortly."
+            ),
+        ) from exc
 
 
 # ── Track registry ────────────────────────────────────────────────────────────
@@ -194,6 +313,30 @@ def _build_result_payload(state: dict, api_base: str = "") -> dict:
     }
 
 
+def _api_base() -> str:
+    """Origin to prefix onto /outputs URLs so downloads point at this API, not the frontend.
+
+    Falls back to RENDER_EXTERNAL_URL, which Render injects automatically — without it
+    the payload carries bare "/outputs/..." paths that resolve against the Vercel origin
+    and 404, since the generated PDF/JSON live here.
+    """
+    return (os.getenv("API_BASE_URL") or os.getenv("RENDER_EXTERNAL_URL") or "").rstrip("/")
+
+
+def _mark_job_failed(job_id: str, message: str) -> None:
+    """Best-effort 'failed' write. Never raises — it runs from except blocks, and if
+    the job store is what broke, re-raising here would replace the real error with a
+    connection error and leave the row stuck on 'processing' either way."""
+    try:
+        get_supabase().table("jobs").update({
+            "status": "failed",
+            "error_message": message,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }).eq("id", job_id).execute()
+    except Exception as exc:
+        print(f"[Job {job_id}] Could not record failure ({message!r}): {exc}")
+
+
 async def _run_job(
     job_id: str,
     api_base: str,
@@ -205,8 +348,8 @@ async def _run_job(
 ) -> None:
     # TODO(live-progress): wire Modal's real /jobs stage into a `stage` column and
     # surface it in GET /jobs/{id} so the loader shows true progress (deferred — V2).
-    sb = get_supabase()
     try:
+        sb = get_supabase()
         now_iso = datetime.now(timezone.utc).isoformat()
         sb.table("jobs").update({"status": "processing", "updated_at": now_iso}).eq("id", job_id).execute()
 
@@ -237,15 +380,9 @@ async def _run_job(
         }).eq("id", job_id).execute()
 
     except asyncio.TimeoutError:
-        now_iso = datetime.now(timezone.utc).isoformat()
-        sb.table("jobs").update({
-            "status": "failed", "error_message": "Analysis timed out after 560 seconds.", "updated_at": now_iso
-        }).eq("id", job_id).execute()
+        _mark_job_failed(job_id, "Analysis timed out after 560 seconds.")
     except Exception as exc:
-        now_iso = datetime.now(timezone.utc).isoformat()
-        sb.table("jobs").update({
-            "status": "failed", "error_message": str(exc), "updated_at": now_iso
-        }).eq("id", job_id).execute()
+        _mark_job_failed(job_id, str(exc))
     finally:
         if audio_path:
             try:
@@ -281,12 +418,13 @@ async def analyze(background_tasks: BackgroundTasks, file: UploadFile = File(...
                 raise HTTPException(status_code=413, detail="File too large. Max 50 MB.")
             out.write(chunk)
 
-    sb = get_supabase()
-    sb.table("jobs").insert({
-        "id": job_id, "status": "pending", "user_input": file.filename, "stress_test": False,
-    }).execute()
+    try:
+        _create_job_row(job_id, file.filename, stress_test=False)
+    except HTTPException:
+        audio_path.unlink(missing_ok=True)  # don't leak the upload if the job never starts
+        raise
 
-    api_base = os.getenv("API_BASE_URL", "")
+    api_base = _api_base()
     background_tasks.add_task(
         _run_job, job_id, api_base,
         audio_path=str(audio_path), audio_filename=file.filename, stress_test=False,
@@ -303,12 +441,9 @@ async def demo(req: DemoRequest, background_tasks: BackgroundTasks):
     job_id = str(uuid.uuid4())
     stress_test = track["stress_test"]
 
-    sb = get_supabase()
-    sb.table("jobs").insert({
-        "id": job_id, "status": "pending", "user_input": req.track_id, "stress_test": stress_test,
-    }).execute()
+    _create_job_row(job_id, req.track_id, stress_test=stress_test)
 
-    api_base = os.getenv("API_BASE_URL", "")
+    api_base = _api_base()
     background_tasks.add_task(
         _run_job, job_id, api_base,
         demo_track_id=req.track_id, stress_test=stress_test,
@@ -318,8 +453,21 @@ async def demo(req: DemoRequest, background_tasks: BackgroundTasks):
 
 @app.get("/jobs/{job_id}")
 def get_job(job_id: str):
-    sb = get_supabase()
-    response = sb.table("jobs").select("*").eq("id", job_id).single().execute()
+    try:
+        response = get_supabase().table("jobs").select("*").eq("id", job_id).single().execute()
+    except APIError as exc:
+        # .single() raises rather than returning empty data when no row matches.
+        raise HTTPException(status_code=404, detail="Job not found") from exc
+    except Exception as exc:
+        # Connection/DNS/auth failure — distinct from "this job doesn't exist", and
+        # the frontend polls this every 3s, so it must not look like a dead job.
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Job store unavailable ({type(exc).__name__}). Could not read job status."
+            ),
+        ) from exc
 
     if not response.data:
         raise HTTPException(status_code=404, detail="Job not found")
