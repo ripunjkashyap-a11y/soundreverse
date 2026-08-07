@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import TrackSelector from './components/TrackSelector'
 import FileUpload from './components/FileUpload'
 import AnalyzeButton from './components/AnalyzeButton'
@@ -8,6 +8,7 @@ import ConfidencePanel from './components/ConfidencePanel'
 import CriticTimeline from './components/CriticTimeline'
 import ProducerSettings from './components/ProducerSettings'
 import OutputDownloads from './components/OutputDownloads'
+import FrequencyMap from './components/FrequencyMap'
 
 const API_BASE = import.meta.env.VITE_API_URL ?? ''
 
@@ -73,6 +74,25 @@ function useBackendReady() {
   return { ready, waiting, elapsed }
 }
 
+// Theme lives on <html data-theme>. index.html resolves it before first paint,
+// so this hook only has to read that value back and keep it in sync.
+function useTheme() {
+  const [theme, setTheme] = useState(
+    () => document.documentElement.getAttribute('data-theme') || 'light'
+  )
+
+  const toggle = useCallback(() => {
+    setTheme(prev => {
+      const next = prev === 'dark' ? 'light' : 'dark'
+      document.documentElement.setAttribute('data-theme', next)
+      try { localStorage.setItem('sr-theme', next) } catch { /* private mode */ }
+      return next
+    })
+  }, [])
+
+  return { theme, toggle }
+}
+
 // Pull the server's own explanation out of an error response.
 // FastAPI's 422 `detail` is an array of validation objects — take the first message.
 async function readErrorDetail(res) {
@@ -93,8 +113,21 @@ function describeError(e) {
   return e?.message || 'Something went wrong.'
 }
 
+// The generated PDF/JSON are served by the API, not this origin. The backend only emits
+// absolute URLs when API_BASE_URL is configured; otherwise they arrive as "/outputs/…",
+// which a browser resolves against the frontend host and 404s. Re-anchor those onto the API.
+function resolveOutputs(outputs) {
+  if (!outputs) return outputs
+  return Object.fromEntries(
+    Object.entries(outputs).map(([key, url]) => [
+      key,
+      typeof url === 'string' && url.startsWith('/') ? `${API_BASE}${url}` : url,
+    ])
+  )
+}
+
 export default function App() {
-  const [tracks, setTracks]           = useState([])
+  const [tracks, setTracks]             = useState([])
   const [uploadedFile, setUploadedFile] = useState(null)
   const [selectedDemo, setSelectedDemo] = useState('')
   const [result, setResult]             = useState(null)
@@ -103,6 +136,7 @@ export default function App() {
   const [splashExiting, setSplashExiting] = useState(false)
 
   const { ready: backendReady, waiting: serverWaking, elapsed } = useBackendReady()
+  const { theme, toggle: toggleTheme } = useTheme()
   const booting = !backendReady || !splashExiting
 
   // Once backend responds, start the fade-out and fetch tracks
@@ -178,91 +212,220 @@ export default function App() {
     }
   }
 
+  const selectedLabel = uploadedFile
+    ? uploadedFile.name
+    : (tracks.find(t => t.track_id === selectedDemo)?.label || '')
+
+  const pageTitle = loading
+    ? 'Analysing'
+    : result
+      ? result.track.title
+      : 'Session'
+
   return (
     <>
-    {booting && <Splash exiting={splashExiting} ready={backendReady} serverWaking={serverWaking} elapsed={elapsed} />}
-    <div className="app-layout">
+      {booting && (
+        <Splash exiting={splashExiting} ready={backendReady} serverWaking={serverWaking} elapsed={elapsed} />
+      )}
 
-      {/* ── Left Sidebar ── */}
-      <aside className="sidebar">
-
-        {/* Brand */}
-        <div style={{ padding: '32px 24px 24px' }}>
-          <p className="eyebrow" style={{ marginBottom: 8 }}>Audio Intelligence</p>
-          <h1 className="font-brand" style={{
-            margin: 0,
-            fontSize: 27,
-            fontWeight: 700,
-            color: '#ffffff',
-            lineHeight: 1.1,
-            letterSpacing: '-0.035em',
-          }}>
-            Sound<span style={{ color: 'rgba(255,255,255,0.55)' }}>Reverse</span>
-          </h1>
-          <p style={{
-            margin: '8px 0 0',
-            fontSize: 12,
-            color: 'rgba(255,255,255,0.55)',
-            lineHeight: 1.5,
-          }}>
-            LangGraph multi-agent mastering analysis
-          </p>
-        </div>
-
-        <div className="divider" style={{ margin: '0 24px' }} />
-
-        {/* Track list */}
-        <div style={{ padding: '20px 16px', flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
-          <p className="eyebrow" style={{ marginBottom: 12, paddingLeft: 4 }}>Upload a Track</p>
-          <div style={{ marginBottom: 20 }}>
-            <FileUpload onFileChange={(f) => { setUploadedFile(f); if (f) setSelectedDemo('') }} />
-          </div>
-
-          <p className="eyebrow" style={{ marginBottom: 12, paddingLeft: 4 }}>Or try a demo</p>
-          <TrackSelector tracks={tracks} selected={selectedDemo} onChange={(id) => { setSelectedDemo(id); setUploadedFile(null) }} />
-
-          {/* Decorative spectrum — sits below the track list */}
-          <div style={{ flex: 1, display: 'flex', alignItems: 'flex-end', paddingTop: 24, paddingBottom: 4 }}>
-            <SidebarSpectrum />
-          </div>
-        </div>
-
-        {/* Analyze + footer */}
-        <div style={{ padding: '16px 20px 24px', borderTop: '1px solid rgba(255,255,255,0.15)' }}>
-          {error && (
-            <div style={{
-              marginBottom: 12,
-              padding: '10px 14px',
-              background: 'var(--clay-pale)',
-              border: '1px solid var(--clay-border)',
-              borderRadius: 'var(--r-inner)',
-              fontSize: 12,
-              fontWeight: 500,
-              color: 'var(--clay)',
-            }}>
-              ⚠ {error}
+      <div className="app">
+        {/* ── Sidebar ── */}
+        <aside className="sidebar">
+          <div className="brand">
+            <span className="brand-mark"><WaveIcon /></span>
+            <div>
+              <p className="brand-name">SoundReverse</p>
+              <p className="brand-sub">Audio intelligence</p>
             </div>
-          )}
-          <AnalyzeButton
-            loading={loading}
-            disabled={!uploadedFile && !selectedDemo}
-            onClick={handleAnalyze}
-          />
-        </div>
-      </aside>
+          </div>
 
-      {/* ── Right Panel ── */}
-      <main className="output-panel">
-        {loading ? (
-          <LoadingState label={uploadedFile ? uploadedFile.name : (tracks.find(t => t.track_id === selectedDemo)?.label || '')} />
-        ) : result ? (
-          <ResultsView result={result} />
-        ) : (
-          <EmptyState />
-        )}
-      </main>
-    </div>
+          <div className="side-scroll">
+            <div className="side-group">
+              <p className="label">Source</p>
+              <FileUpload onFileChange={(f) => { setUploadedFile(f); if (f) setSelectedDemo('') }} />
+            </div>
+
+            <div className="side-group">
+              <p className="label">Demo tracks</p>
+              <TrackSelector
+                tracks={tracks}
+                selected={selectedDemo}
+                onChange={(id) => { setSelectedDemo(id); setUploadedFile(null) }}
+              />
+            </div>
+          </div>
+
+          <div className="side-foot">
+            {error && (
+              <div className="fade-in" style={{
+                marginBottom: 12,
+                padding: '10px 12px',
+                borderRadius: 'var(--r-inner)',
+                background: 'var(--magenta-soft)',
+                color: 'var(--magenta-text)',
+                fontSize: 12,
+                lineHeight: 1.5,
+                fontWeight: 500,
+              }}>
+                {error}
+              </div>
+            )}
+            <AnalyzeButton
+              loading={loading}
+              disabled={!uploadedFile && !selectedDemo}
+              onClick={handleAnalyze}
+            />
+          </div>
+        </aside>
+
+        {/* ── Main ── */}
+        <div className="main">
+          <header className="topbar">
+            <div style={{ minWidth: 0 }}>
+              <h1 className="page-title" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {pageTitle}
+              </h1>
+              {result?.track.artist && (
+                <p style={{ margin: 0, fontSize: 12, color: 'var(--text-4)' }}>{result.track.artist}</p>
+              )}
+            </div>
+            <div className="topbar-spacer" />
+            <ThemeToggle theme={theme} onToggle={toggleTheme} />
+          </header>
+
+          <div className="canvas">
+            {loading ? (
+              <LoadingState label={selectedLabel} />
+            ) : result ? (
+              <ResultsView result={result} />
+            ) : (
+              <EmptyState />
+            )}
+          </div>
+        </div>
+      </div>
     </>
+  )
+}
+
+function ThemeToggle({ theme, onToggle }) {
+  const isDark = theme === 'dark'
+  return (
+    <button
+      className="theme-toggle"
+      onClick={onToggle}
+      role="switch"
+      aria-checked={isDark}
+      aria-label="Dark mode"
+      title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+    >
+      <SunIcon className={isDark ? '' : 'icon-active'} />
+      <span className="toggle-track"><span className="toggle-knob" /></span>
+      <MoonIcon className={isDark ? 'icon-active' : ''} />
+    </button>
+  )
+}
+
+function ResultsView({ result }) {
+  const { track, pipeline, settings, musician, outputs, trace_url: traceUrl } = result
+
+  return (
+    <div className="grid stagger">
+      <SignalSummary track={track} confidence={pipeline.confidence} />
+
+      <FrequencyMap targets={musician?.tuning_targets} eq={settings?.eq} />
+
+      <ProducerSettings settings={settings} />
+      <ConfidencePanel pipeline={pipeline} />
+
+      <MusicianNotes musician={musician} />
+      <CriticTimeline rounds={pipeline.critic_rounds} />
+
+      <OutputDownloads outputs={resolveOutputs(outputs)} traceUrl={traceUrl} />
+    </div>
+  )
+}
+
+function EmptyState() {
+  return (
+    <div className="fade-in" style={{
+      height: '100%',
+      minHeight: 380,
+      display: 'grid',
+      placeItems: 'center',
+      textAlign: 'center',
+      padding: 24,
+    }}>
+      <div style={{ maxWidth: 320 }}>
+        <div style={{
+          width: 52, height: 52, margin: '0 auto 18px',
+          borderRadius: 14, background: 'var(--blue-soft)', color: 'var(--blue)',
+          display: 'grid', placeItems: 'center',
+        }}>
+          <WaveIcon size={24} />
+        </div>
+        <h2 style={{ margin: '0 0 8px', fontSize: 18, fontWeight: 600, color: 'var(--text-1)' }}>
+          Nothing analysed yet
+        </h2>
+        <p style={{ margin: 0, fontSize: 13.5, color: 'var(--text-3)', lineHeight: 1.6 }}>
+          Upload a track or pick a demo from the sidebar, then run the analysis to build a
+          producer session pack.
+        </p>
+      </div>
+    </div>
+  )
+}
+
+const LOADING_STAGES = [
+  'Researching the track',
+  'Reading the signal signature',
+  'Mapping producer settings',
+  'Cross-checking with the critic',
+  'Finalising your session pack',
+]
+
+// TODO(mcp-integration): these captions currently cycle on a timer (cosmetic only) —
+// they convey what the pipeline does, not real live status. Once the backend reports a
+// live `stage` in GET /jobs/{id} (see api.py placeholders), pass it in as a prop and
+// render that instead of the timer-driven index below.
+const METER_BARS = [40, 70, 100, 55, 85, 30, 65, 95, 45, 75]
+
+function LoadingState({ label }) {
+  const [stage, setStage] = useState(0)
+
+  useEffect(() => {
+    const id = setInterval(() => setStage(s => (s + 1) % LOADING_STAGES.length), 2800)
+    return () => clearInterval(id)
+  }, [])
+
+  return (
+    <div className="fade-in" style={{
+      height: '100%', minHeight: 380, display: 'grid', placeItems: 'center', textAlign: 'center', padding: 24,
+    }}>
+      <div style={{ maxWidth: 340 }}>
+        <div className="meter" style={{ justifyContent: 'center', marginBottom: 22 }}>
+          {METER_BARS.map((h, i) => (
+            <span
+              key={i}
+              className="meter-bar"
+              style={{ height: `${h}%`, animationDelay: `${-(i * 0.13).toFixed(2)}s` }}
+            />
+          ))}
+        </div>
+        <h2 style={{ margin: '0 0 6px', fontSize: 18, fontWeight: 600, color: 'var(--text-1)' }}>
+          Analysing
+        </h2>
+        {label && (
+          <p style={{ margin: '0 0 16px', fontSize: 13.5, color: 'var(--text-3)' }}>{label}</p>
+        )}
+        <p key={stage} className="label fade-in" style={{ color: 'var(--blue)' }}>
+          {LOADING_STAGES[stage]}
+        </p>
+        <p style={{ margin: '16px 0 0', fontSize: 12, color: 'var(--text-4)', lineHeight: 1.6 }}>
+          This can take up to a minute — keep this tab open.
+        </p>
+      </div>
+    </div>
   )
 }
 
@@ -282,72 +445,45 @@ function Splash({ exiting, ready, serverWaking, elapsed }) {
 
   return (
     <div className={`splash${exiting ? ' exiting' : ''}`}>
-      <div className="splash-mark" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 26 }}>
-        <p className="eyebrow" style={{ margin: 0, color: 'var(--ink-4)' }}>Audio Intelligence</p>
-        <h1 className="font-brand" style={{
-          margin: 0,
-          fontSize: 44,
-          fontWeight: 700,
-          color: 'var(--ink)',
-          letterSpacing: '-0.04em',
-          lineHeight: 1,
-        }}>
-          Sound<span style={{ color: 'var(--ink-4)' }}>Reverse</span>
-        </h1>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 24, padding: 24 }}>
+        <span className="brand-mark" style={{ width: 46, height: 46, borderRadius: 14 }}>
+          <WaveIcon size={22} />
+        </span>
 
-        {/* ── Loading bar — primary boot indicator (replaces the spinner) ── */}
-        <div style={{
-          display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14,
-          marginTop: 6, width: 280, maxWidth: '72vw',
-        }}>
+        <div style={{ textAlign: 'center' }}>
+          <h1 style={{ margin: 0, fontSize: 26, fontWeight: 700, letterSpacing: '-0.03em', color: 'var(--text-1)' }}>
+            SoundReverse
+          </h1>
+          <p style={{ margin: '4px 0 0', fontSize: 13, color: 'var(--text-4)' }}>
+            Multi-agent mastering analysis
+          </p>
+        </div>
+
+        <div style={{ width: 260, maxWidth: '72vw' }}>
           <div
+            className="splash-bar"
             role="progressbar"
             aria-label="Loading SoundReverse"
             aria-valuenow={progress}
             aria-valuemin={0}
             aria-valuemax={100}
-            style={{
-              width: '100%', height: 6, borderRadius: 'var(--r-pill)',
-              background: 'var(--border)', overflow: 'hidden', position: 'relative',
-            }}
           >
-            {/* Determinate fill — scaleX is GPU-cheap and animates smoothly */}
-            <div style={{
-              position: 'absolute', inset: 0, transformOrigin: 'left',
-              transform: `scaleX(${progress / 100})`,
-              background: 'var(--text-1)', borderRadius: 'var(--r-pill)',
-              transition: 'transform 0.5s cubic-bezier(0.16, 1, 0.3, 1)',
-            }} />
-            {/* Shimmer sweep — keeps the bar alive while we wait */}
-            {!ready && (
-              <div style={{
-                position: 'absolute', top: 0, bottom: 0, width: '38%',
-                background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.6), transparent)',
-                animation: 'indeterminate 1.4s cubic-bezier(0.45, 0, 0.55, 1) infinite',
-              }} />
-            )}
+            <span className="splash-fill" style={{ transform: `scaleX(${progress / 100})` }} />
           </div>
 
-          {/* Status line under the bar */}
-          <p style={{
-            margin: 0, fontSize: 13.5, fontWeight: 500,
-            color: 'var(--ink-3)', lineHeight: 1.5, textAlign: 'center',
-          }}>
-            {ready ? 'Ready' : serverWaking ? 'Server is waking up…' : 'Connecting…'}
+          <p style={{ margin: '14px 0 0', fontSize: 13, color: 'var(--text-3)', textAlign: 'center' }}>
+            {ready ? 'Ready' : serverWaking ? 'Waking the server…' : 'Connecting…'}
           </p>
 
-          {/* Cold-start detail — only after the first health ping fails */}
           {serverWaking && !ready && (
-            <p className="anim-fade" style={{
-              margin: 0, fontSize: 12, color: 'var(--ink-4)',
-              lineHeight: 1.6, textAlign: 'center', maxWidth: 300,
+            <p className="fade-in" style={{
+              margin: '6px 0 0', fontSize: 12, color: 'var(--text-4)', lineHeight: 1.6, textAlign: 'center',
             }}>
               {elapsedSec < 10
-                ? 'This free-tier server sleeps when idle — it\'ll be ready in ~30 seconds.'
+                ? 'The free-tier server sleeps when idle — about 30 seconds.'
                 : elapsedSec < 40
                   ? `Almost there… (${elapsedSec}s)`
-                  : `Still spinning up — hang tight (${elapsedSec}s)`
-              }
+                  : `Still spinning up — hang tight (${elapsedSec}s)`}
             </p>
           )}
         </div>
@@ -356,208 +492,30 @@ function Splash({ exiting, ready, serverWaking, elapsed }) {
   )
 }
 
-function EmptyState() {
+function WaveIcon({ size = 18 }) {
   return (
-    <div style={{
-      position: 'relative',
-      height: '100%',
-      display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'center',
-      justifyContent: 'center',
-      padding: '40px 48px',
-      textAlign: 'center',
-      overflow: 'hidden',
-    }}>
-      <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-        <div className="pulse-breathe" style={{
-          width: 56,
-          height: 56,
-          borderRadius: '50%',
-          background: 'var(--ink)',
-          border: 'none',
-          boxShadow: 'var(--shadow-sm)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          marginBottom: 22,
-          color: '#ffffff',
-        }}>
-          <WaveformIcon />
-        </div>
-        <h2 className="font-brand" style={{
-          margin: '0 0 10px',
-          fontSize: 23,
-          fontWeight: 600,
-          color: 'var(--ink-2)',
-          letterSpacing: '-0.02em',
-        }}>
-          No analysis yet
-        </h2>
-        <p style={{
-          margin: 0,
-          fontSize: 13.5,
-          color: 'var(--ink-4)',
-          lineHeight: 1.65,
-          maxWidth: 280,
-        }}>
-          Select a track from the sidebar and run analysis to generate a Producer Session Pack.
-        </p>
-        <div className="pill" style={{
-          marginTop: 26,
-          background: 'var(--ink)',
-          border: 'none',
-          boxShadow: 'var(--shadow-xs)',
-          color: '#ffffff',
-          letterSpacing: '0.04em',
-        }}>
-          <span>←</span>
-          <span>choose from the sidebar</span>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// The generated PDF/JSON are served by the API, not this origin. The backend only emits
-// absolute URLs when API_BASE_URL is configured; otherwise they arrive as "/outputs/…",
-// which a browser resolves against the frontend host and 404s. Re-anchor those onto the API.
-function resolveOutputs(outputs) {
-  if (!outputs) return outputs
-  return Object.fromEntries(
-    Object.entries(outputs).map(([key, url]) => [
-      key,
-      typeof url === 'string' && url.startsWith('/') ? `${API_BASE}${url}` : url,
-    ])
-  )
-}
-
-function ResultsView({ result }) {
-  return (
-    <div className="stagger" style={{ padding: '28px 32px', display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <SignalSummary    track={result.track}                   />
-      <MusicianNotes    musician={result.musician}             />
-      <CriticTimeline   rounds={result.pipeline.critic_rounds} />
-      <ConfidencePanel  pipeline={result.pipeline}             />
-      <ProducerSettings settings={result.settings}            />
-      <OutputDownloads  outputs={resolveOutputs(result.outputs)} traceUrl={result.trace_url} />
-    </div>
-  )
-}
-
-const LOADING_STAGES = [
-  'Researching the track',
-  'Reading the signal signature',
-  'Mapping producer settings',
-  'Cross-checking with the critic',
-  'Finalizing your session pack',
-]
-
-// TODO(mcp-integration): these captions currently cycle on a timer (cosmetic only) —
-// they convey what the pipeline does, not real live status. Once the backend reports a
-// live `stage` in GET /jobs/{id} (see api.py placeholders), pass it in as a prop and
-// render that instead of the timer-driven index below.
-function LoadingState({ label }) {
-  const [stage, setStage] = useState(0)
-
-  useEffect(() => {
-    const id = setInterval(() => setStage(s => (s + 1) % LOADING_STAGES.length), 2800)
-    return () => clearInterval(id)
-  }, [])
-
-  return (
-    <div className="loading-state anim-fade">
-      <WaveformViz />
-      <h2 className="font-brand" style={{
-        margin: '16px 0 0',
-        fontSize: 24,
-        fontWeight: 600,
-        color: 'var(--ink-2)',
-        letterSpacing: '-0.02em',
-      }}>
-        Analyzing…
-      </h2>
-      {label && (
-        <p style={{ margin: '6px 0 0', fontSize: 14, color: 'var(--ink-3)', maxWidth: 320 }}>
-          {label}
-        </p>
-      )}
-
-      <p
-        key={stage}
-        className="eyebrow anim-fade"
-        style={{ marginTop: 24, color: 'var(--ink-4)', opacity: 0.9 }}
-      >
-        {LOADING_STAGES[stage]}
-      </p>
-
-      <p style={{
-        margin: '14px 0 0',
-        fontSize: 12.5,
-        color: 'var(--ink-4)',
-        lineHeight: 1.6,
-        maxWidth: 300,
-      }}>
-        This can take up to a minute — hang tight and keep this tab open.
-      </p>
-    </div>
-  )
-}
-
-// 16-bar animated waveform visualizer — replaces spinner in loading state.
-// Each bar gets a unique --max-h and a negative animationDelay so all bars
-// start mid-cycle (already at different phases) instead of all bouncing together.
-const WVZ_HEIGHTS = [4, 8, 14, 20, 12, 26, 32, 22, 36, 28, 30, 20, 24, 16, 10, 5]
-
-function WaveformViz() {
-  return (
-    <div className="waveform-viz">
-      {WVZ_HEIGHTS.map((h, i) => (
-        <div
-          key={i}
-          className="wvz-bar"
-          style={{
-            '--max-h': `${h}px`,
-            animationDelay: `${-(i * 0.072).toFixed(3)}s`,
-          }}
-        />
-      ))}
-    </div>
-  )
-}
-
-// Decorative frequency-spectrum bars for the sidebar bottom — purely atmospheric.
-const SPECTRUM_HEIGHTS = [2,4,7,11,8,15,10,19,13,17,21,15,19,13,17,11,15,9,13,7,11,6,9,5,7,4,6,3,5,3,4,2]
-
-function SidebarSpectrum() {
-  const max = Math.max(...SPECTRUM_HEIGHTS)
-  return (
-    <div className="sidebar-spectrum" style={{ width: '100%' }}>
-      {SPECTRUM_HEIGHTS.map((h, i) => (
-        <div
-          key={i}
-          className="sidebar-spectrum-bar"
-          style={{ height: `${(h / max) * 100}%` }}
-        />
-      ))}
-    </div>
-  )
-}
-
-function WaveformIcon() {
-  return (
-    <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
+    <svg width={size} height={size} viewBox="0 0 22 22" fill="none" aria-hidden="true">
       <path d="M1 11h3M18 11h3M5 7v8M8 4v14M11 8v6M14 5v12M17 7v8"
-        stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+        stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
     </svg>
   )
 }
 
-function ArrowIcon() {
+function SunIcon({ className = '' }) {
   return (
-    <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
-      <path d="M3 7.5h8M7.5 4l3.5 3.5-3.5 3.5"
-        stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+    <svg className={className} width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <circle cx="8" cy="8" r="3.1" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M8 1v1.6M8 13.4V15M15 8h-1.6M2.6 8H1M12.9 3.1l-1.1 1.1M4.2 11.8l-1.1 1.1M12.9 12.9l-1.1-1.1M4.2 4.2L3.1 3.1"
+        stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function MoonIcon({ className = '' }) {
+  return (
+    <svg className={className} width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M13.5 9.8A5.8 5.8 0 016.2 2.5a5.9 5.9 0 107.3 7.3z"
+        stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
     </svg>
   )
 }

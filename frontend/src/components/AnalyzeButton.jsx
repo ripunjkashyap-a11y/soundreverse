@@ -1,13 +1,16 @@
 export default function AnalyzeButton({ loading, disabled, onClick }) {
   return (
-    <button className="analyze-btn" onClick={onClick} disabled={loading || disabled}>
+    <button className="btn" onClick={onClick} disabled={disabled || loading}>
       {loading ? (
         <>
           <Spinner />
-          Analyzing…
+          Analysing…
         </>
       ) : (
-        'Run Analysis'
+        <>
+          Run analysis
+          <ArrowIcon />
+        </>
       )}
     </button>
   )
@@ -15,16 +18,19 @@ export default function AnalyzeButton({ loading, disabled, onClick }) {
 
 function Spinner() {
   return (
-    <svg width="15" height="15" viewBox="0 0 15 15" fill="none" style={{ flexShrink: 0 }}>
-      <circle cx="7.5" cy="7.5" r="6" stroke="rgba(255,255,255,0.25)" strokeWidth="1.5" />
-      <circle
-        cx="7.5" cy="7.5" r="6"
-        stroke="white"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeDasharray="9 28"
-        style={{ animation: 'spin-slow 0.85s linear infinite', transformOrigin: '7.5px 7.5px' }}
-      />
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"
+      style={{ animation: 'spin 0.8s linear infinite' }}>
+      <circle cx="7" cy="7" r="5.5" stroke="currentColor" strokeWidth="2" opacity="0.25" />
+      <path d="M12.5 7A5.5 5.5 0 0 0 7 1.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function ArrowIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 15 15" fill="none" aria-hidden="true">
+      <path d="M3 7.5h8M7.5 4l3.5 3.5-3.5 3.5" stroke="currentColor" strokeWidth="1.8"
+        strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   )
 }
