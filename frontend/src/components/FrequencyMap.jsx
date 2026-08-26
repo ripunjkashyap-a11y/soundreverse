@@ -90,7 +90,16 @@ export default function FrequencyMap({ targets = [], eq = [] }) {
             <div
               key={t.element}
               className="freqmap-marker"
-              style={{ left: `${toPct(Number(t.hz))}%`, animationDelay: `${0.25 + i * 0.09}s` }}
+              style={{
+                left: `${toPct(Number(t.hz))}%`,
+                animationDelay: `${0.25 + i * 0.09}s`,
+                // The entry animation puts a transform on each marker, which makes
+                // it its own stacking context — so a caption cannot raise itself
+                // above a neighbour's stem on its own. Order the markers instead:
+                // the lower tier paints last so its captions cut the taller stems
+                // that run down past them to the axis.
+                zIndex: tall ? 1 : 2,
+              }}
             >
               <span style={{
                 fontSize: 11,

@@ -555,11 +555,16 @@ body {
   border-radius: 2px;
 }
 
-/* Tinted zone showing where an EQ band acts */
+/* Tinted band showing the frequency range an EQ band acts over. What it
+   encodes is horizontal — a span in Hz — so the height only has to be enough
+   to read as a band. Keeping it below the marker captions (the lowest of
+   which starts 23px above this element's top edge) means no caption is ever
+   printed over a tint, which is what lets the caption knockout below stay
+   invisible. */
 .freqmap-zone {
   position: absolute;
   bottom: 26px;
-  height: 74px;
+  height: 18px;
   border-radius: 6px 6px 0 0;
   background: linear-gradient(180deg, transparent, var(--blue-soft) 55%, var(--blue-soft));
   border-top: 2px solid var(--blue);
@@ -588,6 +593,17 @@ body {
 }
 
 .freqmap-stem { width: 2px; border-radius: 1px; }
+
+/* A marker's stem runs from its dot down to the axis, so it necessarily
+   crosses the rows where a close neighbour's captions sit — no amount of
+   spacing avoids that, only paint order does. Lift the caption above the
+   stems and give it the card's own background so the line is cut cleanly
+   rather than showing through the glyphs. The band above keeps every caption
+   off the tints, so this knockout never reads as a plate. */
+.freqmap-marker span.mono {
+  padding: 0 4px;
+  background: var(--surface);
+}
 
 .freqmap-dot {
   width: 9px;
