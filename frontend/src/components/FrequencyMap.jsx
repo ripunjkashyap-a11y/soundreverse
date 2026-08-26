@@ -19,6 +19,10 @@ function toPct(hz) {
 
 const ACCENTS = ['var(--blue)', 'var(--amber)', 'var(--green)', 'var(--magenta)']
 
+// Widest sub-label ("3800 Hz · A#7") as a rough % of the map's width. Markers
+// closer together than this need their labels tiered apart to stay readable.
+const LABEL_GAP_PCT = 12
+
 const TICKS = [
   { hz: 20,    label: '20' },
   { hz: 100,   label: '100' },
@@ -31,6 +35,22 @@ export default function FrequencyMap({ targets = [], eq = [] }) {
   const points = (targets ?? []).filter(t => Number.isFinite(Number(t?.hz)))
   const bands  = (eq ?? []).filter(b => Number.isFinite(Number(b?.freq)))
   if (points.length === 0 && bands.length === 0) return null
+
+  // Which vertical tier each marker's label sits in. Walk the markers in
+  // frequency order — not the order they arrive in, which is by instrument
+  // (kick, snare, bass, vocal) and says nothing about how close together they
+  // land on a log axis. Kick and bass are both low-end fundamentals, so they
+  // are always the crowded pair; everything else is usually far enough apart
+  // to share the baseline.
+  const tiers = new Map()
+  let prevPct = -Infinity
+  let tier = 0
+  for (const t of [...points].sort((a, b) => Number(a.hz) - Number(b.hz))) {
+    const x = toPct(Number(t.hz))
+    tier = x - prevPct < LABEL_GAP_PCT ? 1 - tier : 0
+    tiers.set(t.element, tier)
+    prevPct = x
+  }
 
   return (
     <section className="card col-12">
@@ -61,11 +81,11 @@ export default function FrequencyMap({ targets = [], eq = [] }) {
           )
         })}
 
-        {/* Tuning targets as labelled markers. Alternating stem heights keep
-            neighbouring labels from colliding on a crowded low end. */}
+        {/* Tuning targets as labelled markers. A taller stem lifts a label clear
+            of the one next to it when the two sit too close to share a row. */}
         {points.map((t, i) => {
           const colour = ACCENTS[i % ACCENTS.length]
-          const tall = i % 2 === 0
+          const tall = tiers.get(t.element) === 0
           return (
             <div
               key={t.element}
