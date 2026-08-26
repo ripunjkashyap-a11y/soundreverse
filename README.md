@@ -247,7 +247,7 @@ Live trace: [smith.langchain.com/public/58461f05-d106-47c2-93a4-bbf8460f4c2a/r](
 | Layer | Technology |
 |---|---|
 | Agent orchestration | LangGraph `StateGraph` — conditional edges, typed `GraphState` |
-| LLM | `llama-3.1-8b-instant` via `langchain-groq` — structured tool calling (override with `GROQ_MODEL`) |
+| LLM | `openai/gpt-oss-20b` via `langchain-groq` — structured tool calling (override with `GROQ_MODEL`) |
 | Audio analysis | HTDemucs 4-stem, FFmpeg, Librosa — **Modal-hosted MCP server** |
 | MCP client | `requests` + `tenacity` — streams file, polls job, deserialises `SignalSignature` |
 | Schema validation | Pydantic v2 |
@@ -310,7 +310,7 @@ Edit `.env` with your credentials:
 | Variable | Required | Notes |
 |---|---|---|
 | `GROQ_API_KEY` | ✅ Always | Groq API key |
-| `GROQ_MODEL` | ⚙️ Optional | Defaults to `llama-3.1-8b-instant` |
+| `GROQ_MODEL` | ⚙️ Optional | Defaults to `openai/gpt-oss-20b` |
 | `LANGSMITH_API_KEY` | ✅ Always | LangSmith tracing |
 | `LANGSMITH_PROJECT` | ✅ Always | Project name (default: `soundreverse-v1`) |
 | `LANGCHAIN_TRACING_V2` | ✅ Always | Set to `true` |

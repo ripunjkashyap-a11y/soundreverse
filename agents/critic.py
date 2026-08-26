@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 CONFIDENCE_THRESHOLD = 0.8
 MAX_ITERATIONS = 3
-MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 
 
 @retry(

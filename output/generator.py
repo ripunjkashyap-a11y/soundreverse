@@ -409,7 +409,7 @@ def output_node(state: "GraphState") -> "GraphState":
                 "iterations": state["iteration_count"],
                 # Read at write time so the metadata names the model that actually ran.
                 # Mirrors the default in agents/analyst.py.
-                "model": os.getenv("GROQ_MODEL", "llama-3.1-8b-instant"),
+                "model": os.getenv("GROQ_MODEL", "openai/gpt-oss-20b"),
                 "latency_ms": None,
             },
             "critic": {"rounds": state.get("critic_rounds", [])},

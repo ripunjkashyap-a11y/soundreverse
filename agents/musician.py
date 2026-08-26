@@ -13,7 +13,7 @@ from schemas.musician_notes import MusicianNotes, TuningTarget
 if TYPE_CHECKING:
     from agents.graph import GraphState
 
-MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 
 _NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 

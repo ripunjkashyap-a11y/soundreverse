@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from agents.graph import GraphState
 
 RULES_PATH = Path(__file__).parent.parent / "rules" / "rules.yaml"
-MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 
 
 # ── Tool schema the LLM must call to return reasons ─────────────────────────
